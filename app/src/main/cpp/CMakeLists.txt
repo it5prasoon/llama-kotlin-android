@@ -20,10 +20,12 @@ elseif(${ANDROID_ABI} STREQUAL "armeabi-v7a")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=neon -mfloat-abi=softfp")
 endif()
 
-# llama.cpp source directory (will be added as submodule)
+# ============================================================================
+# llama.cpp Submodule
+# ============================================================================
 set(LLAMA_CPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp)
 
-# Check if llama.cpp exists
+# Check if llama.cpp submodule exists
 if(EXISTS ${LLAMA_CPP_DIR}/CMakeLists.txt)
     message(STATUS "Found llama.cpp at ${LLAMA_CPP_DIR}")
     
@@ -34,6 +36,8 @@ if(EXISTS ${LLAMA_CPP_DIR}/CMakeLists.txt)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     set(LLAMA_STATIC ON CACHE BOOL "" FORCE)
     set(GGML_STATIC ON CACHE BOOL "" FORCE)
+    set(LLAMA_NATIVE OFF CACHE BOOL "" FORCE)    # Don't use native CPU features (cross-compile)
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
     
     # Add llama.cpp as subdirectory
     add_subdirectory(${LLAMA_CPP_DIR} llama.cpp)
@@ -44,10 +48,19 @@ if(EXISTS ${LLAMA_CPP_DIR}/CMakeLists.txt)
         ${LLAMA_CPP_DIR}/ggml/include
         ${LLAMA_CPP_DIR}/common
     )
+    
+    set(LLAMA_AVAILABLE TRUE)
 else()
-    message(WARNING "llama.cpp not found at ${LLAMA_CPP_DIR}. Using stub implementation.")
+    message(WARNING "llama.cpp not found at ${LLAMA_CPP_DIR}")
+    message(WARNING "Run: git submodule update --init --recursive")
+    message(WARNING "Using stub implementation...")
+    set(LLAMA_AVAILABLE FALSE)
     set(LLAMA_INCLUDE_DIRS "")
 endif()
+
+# ============================================================================
+# JNI Library
+# ============================================================================
 
 # JNI source files
 set(JNI_SOURCES
@@ -64,12 +77,12 @@ target_include_directories(llama-android PRIVATE
     ${LLAMA_INCLUDE_DIRS}
 )
 
-# Find required libraries
+# Find required Android libraries
 find_library(log-lib log)
 find_library(android-lib android)
 
 # Link libraries
-if(EXISTS ${LLAMA_CPP_DIR}/CMakeLists.txt)
+if(LLAMA_AVAILABLE)
     target_link_libraries(llama-android
         llama
         ggml
@@ -77,12 +90,14 @@ if(EXISTS ${LLAMA_CPP_DIR}/CMakeLists.txt)
         ${android-lib}
     )
     target_compile_definitions(llama-android PRIVATE LLAMA_AVAILABLE=1)
+    message(STATUS "llama-android will link against llama.cpp")
 else()
     target_link_libraries(llama-android
         ${log-lib}
         ${android-lib}
     )
     target_compile_definitions(llama-android PRIVATE LLAMA_AVAILABLE=0)
+    message(STATUS "llama-android will use stub implementation")
 endif()
 
 # Export symbols

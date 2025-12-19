@@ -30,7 +30,8 @@ android {
         }
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            // Only 64-bit architectures - armv7 has issues with float16 NEON in llama.cpp
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 

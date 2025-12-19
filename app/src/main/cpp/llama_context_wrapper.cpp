@@ -57,8 +57,8 @@ bool LlamaContextWrapper::loadModel(const std::string& modelPath, const LlamaCon
     LOGI("Model params: gpu_layers=%d, use_mmap=%d, use_mlock=%d",
          config.gpuLayers, config.useMmap, config.useMlock);
     
-    // Load the model
-    model_ = llama_load_model_from_file(modelPath.c_str(), modelParams);
+    // Load the model using new API
+    model_ = llama_model_load_from_file(modelPath.c_str(), modelParams);
     if (model_ == nullptr) {
         setError("Failed to load model from: " + modelPath);
         LOGE("%s", lastError_.c_str());
@@ -74,28 +74,22 @@ bool LlamaContextWrapper::loadModel(const std::string& modelPath, const LlamaCon
     ctxParams.n_threads = config.threads;
     ctxParams.n_threads_batch = config.threadsBatch;
     
-    if (config.seed >= 0) {
-        ctxParams.seed = config.seed;
-    } else {
-        ctxParams.seed = static_cast<uint32_t>(std::time(nullptr));
-    }
+    LOGI("Context params: n_ctx=%d, n_batch=%d, n_threads=%d",
+         ctxParams.n_ctx, ctxParams.n_batch, ctxParams.n_threads);
     
-    LOGI("Context params: n_ctx=%d, n_batch=%d, n_threads=%d, seed=%u",
-         ctxParams.n_ctx, ctxParams.n_batch, ctxParams.n_threads, ctxParams.seed);
-    
-    // Create context
-    context_ = llama_new_context_with_model(model_, ctxParams);
+    // Create context using new API
+    context_ = llama_init_from_model(model_, ctxParams);
     if (context_ == nullptr) {
         setError("Failed to create llama context");
         LOGE("%s", lastError_.c_str());
-        llama_free_model(model_);
+        llama_model_free(model_);
         model_ = nullptr;
         return false;
     }
     
     LOGI("Context created successfully");
     
-    // Set up sampler
+    // Set up sampler with config seed
     setupSampler(config);
     
     currentConfig_ = config;
@@ -130,7 +124,7 @@ void LlamaContextWrapper::unloadModel() {
     }
     
     if (model_ != nullptr) {
-        llama_free_model(model_);
+        llama_model_free(model_);
         model_ = nullptr;
         LOGD("Model freed");
     }
@@ -200,19 +194,27 @@ void LlamaContextWrapper::generateStream(const std::string& prompt, TokenCallbac
         return;
     }
     
-    // Clear KV cache
-    llama_kv_cache_clear(context_);
+    // KV cache is already empty for a new generation
+    // No need to clear explicitly
     
     // Create batch for prompt processing
     llama_batch batch = llama_batch_init(cfg.batchSize, 0, 1);
     
-    // Add prompt tokens to batch
+    // Add prompt tokens to batch manually (llama_batch_add was in common.h helper)
+    batch.n_tokens = 0;
     for (size_t i = 0; i < promptTokens.size(); i++) {
-        llama_batch_add(batch, promptTokens[i], i, { 0 }, false);
+        batch.token[batch.n_tokens] = promptTokens[i];
+        batch.pos[batch.n_tokens] = i;
+        batch.n_seq_id[batch.n_tokens] = 1;
+        batch.seq_id[batch.n_tokens][0] = 0;
+        batch.logits[batch.n_tokens] = false;
+        batch.n_tokens++;
     }
     
     // Set logits for last token
-    batch.logits[batch.n_tokens - 1] = true;
+    if (batch.n_tokens > 0) {
+        batch.logits[batch.n_tokens - 1] = true;
+    }
     
     // Process prompt
     if (llama_decode(context_, batch) != 0) {
@@ -227,13 +229,16 @@ void LlamaContextWrapper::generateStream(const std::string& prompt, TokenCallbac
     int n_cur = batch.n_tokens;
     int n_generated = 0;
     
+    // Get vocab for token operations
+    const llama_vocab * vocab = llama_model_get_vocab(model_);
+    
     // Generation loop
     while (n_generated < cfg.maxTokens && !shouldCancel_) {
         // Sample next token
         llama_token newToken = llama_sampler_sample(sampler_, context_, -1);
         
         // Check for end of generation
-        if (llama_token_is_eog(model_, newToken)) {
+        if (llama_vocab_is_eog(vocab, newToken)) {
             LOGI("End of generation token received");
             break;
         }
@@ -245,8 +250,13 @@ void LlamaContextWrapper::generateStream(const std::string& prompt, TokenCallbac
         callback(tokenStr);
         
         // Prepare batch for next token
-        llama_batch_clear(batch);
-        llama_batch_add(batch, newToken, n_cur, { 0 }, true);
+        batch.n_tokens = 0;
+        batch.token[0] = newToken;
+        batch.pos[0] = n_cur;
+        batch.n_seq_id[0] = 1;
+        batch.seq_id[0][0] = 0;
+        batch.logits[0] = true;
+        batch.n_tokens = 1;
         
         // Decode
         if (llama_decode(context_, batch) != 0) {
@@ -275,7 +285,6 @@ void LlamaContextWrapper::generateStream(const std::string& prompt, TokenCallbac
     std::string word;
     while (iss >> word && !shouldCancel_) {
         callback(word + " ");
-        // Small delay to simulate generation (would be removed in production)
     }
 #endif
     
@@ -299,9 +308,7 @@ std::string LlamaContextWrapper::getLastError() const {
 std::string LlamaContextWrapper::getVersion() {
 #if LLAMA_AVAILABLE
     std::string version = LIBRARY_VERSION;
-    version += " (llama.cpp build ";
-    version += std::to_string(LLAMA_BUILD_NUMBER);
-    version += ")";
+    version += " (llama.cpp)";
     return version;
 #else
     return std::string(LIBRARY_VERSION) + " (stub)";
@@ -320,16 +327,16 @@ void LlamaContextWrapper::clearError() {
 #if LLAMA_AVAILABLE
 
 std::vector<llama_token> LlamaContextWrapper::tokenize(const std::string& text, bool addBos) {
-    // Get vocabulary size for initial allocation
-    const int n_vocab = llama_n_vocab(model_);
+    // Get vocab from model
+    const llama_vocab * vocab = llama_model_get_vocab(model_);
     
     // Estimate number of tokens (rough: 1 token per 4 chars)
     int n_tokens_estimate = text.length() / 4 + 16;
     std::vector<llama_token> tokens(n_tokens_estimate);
     
-    // Tokenize
+    // Tokenize using vocab
     int n_tokens = llama_tokenize(
-        model_,
+        vocab,
         text.c_str(),
         text.length(),
         tokens.data(),
@@ -342,7 +349,7 @@ std::vector<llama_token> LlamaContextWrapper::tokenize(const std::string& text, 
         // Need more space
         tokens.resize(-n_tokens);
         n_tokens = llama_tokenize(
-            model_,
+            vocab,
             text.c_str(),
             text.length(),
             tokens.data(),
@@ -364,10 +371,13 @@ std::vector<llama_token> LlamaContextWrapper::tokenize(const std::string& text, 
 std::string LlamaContextWrapper::detokenize(const std::vector<llama_token>& tokens) {
     std::string result;
     
+    // Get vocab from model
+    const llama_vocab * vocab = llama_model_get_vocab(model_);
+    
     for (llama_token token : tokens) {
         // Get token text
         char buf[256];
-        int n = llama_token_to_piece(model_, token, buf, sizeof(buf) - 1, 0, true);
+        int n = llama_token_to_piece(vocab, token, buf, sizeof(buf) - 1, 0, true);
         
         if (n < 0) {
             LOGW("Failed to detokenize token: %d", token);
@@ -393,19 +403,14 @@ void LlamaContextWrapper::setupSampler(const LlamaConfig& config) {
     
     // Add samplers in order
     
-    // Repetition penalty
+    // Repetition penalty (new signature: 4 args)
     if (config.repeatPenalty != 1.0f) {
         llama_sampler_chain_add(sampler_, 
             llama_sampler_init_penalties(
-                llama_n_vocab(model_),  // n_vocab
-                llama_token_eos(model_), // special_eos_id
-                llama_token_nl(model_),  // linefeed_id
                 64,                       // penalty_last_n
                 config.repeatPenalty,    // penalty_repeat
                 0.0f,                    // penalty_freq
-                0.0f,                    // penalty_present
-                false,                   // penalize_nl
-                false                    // ignore_eos
+                0.0f                     // penalty_present
             )
         );
     }
@@ -425,7 +430,7 @@ void LlamaContextWrapper::setupSampler(const LlamaConfig& config) {
         llama_sampler_chain_add(sampler_, llama_sampler_init_temp(config.temperature));
     }
     
-    // Distribution sampling
+    // Distribution sampling with seed
     uint32_t seed = config.seed >= 0 ? config.seed : static_cast<uint32_t>(std::time(nullptr));
     llama_sampler_chain_add(sampler_, llama_sampler_init_dist(seed));
     
