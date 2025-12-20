@@ -27,10 +27,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     private var model: LlamaModel? = null
     private var generationJob: Job? = null
+    
+    // Conversation history for context
+    private val conversationHistory = mutableListOf<ChatMessage>()
+    
+    data class ChatMessage(val role: String, val content: String)
 
     companion object {
         private const val PREFS_NAME = "llama_prefs"
         private const val KEY_MODEL_PATH = "model_path"
+        private const val MAX_HISTORY_TURNS = 10 // Keep last 10 turns to manage context size
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,6 +93,8 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnClear.setOnClickListener {
             binding.tvResponse.text = ""
+            conversationHistory.clear()
+            Toast.makeText(this, "Conversation cleared", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -226,35 +234,60 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun generateResponse(prompt: String) {
+    private fun generateResponse(userMessage: String) {
         val currentModel = model
         if (currentModel == null) {
             Toast.makeText(this, "Please load a model first", Toast.LENGTH_SHORT).show()
             return
         }
 
-        binding.tvResponse.text = ""
+        // Add user message to history
+        conversationHistory.add(ChatMessage("user", userMessage))
+        
+        // Trim history if too long (keep system prompt space)
+        while (conversationHistory.size > MAX_HISTORY_TURNS * 2) {
+            conversationHistory.removeAt(0)
+        }
+
+        // Format prompt with full conversation history
+        val systemPrompt = binding.etSystemPrompt.text.toString()
+        val formattedPrompt = formatLlama32ChatWithHistory(systemPrompt, conversationHistory)
+
+        // Update UI to show conversation
+        updateConversationDisplay()
+        
         binding.btnGenerate.isEnabled = false
         binding.btnCancel.isEnabled = true
         binding.tvStatus.text = "Generating..."
 
+        val responseBuilder = StringBuilder()
+        
         generationJob = lifecycleScope.launch {
             try {
-                currentModel.generateStream(prompt)
+                currentModel.generateStream(formattedPrompt)
                     .catch { e ->
                         withContext(Dispatchers.Main) {
                             binding.tvStatus.text = "Error: ${e.message}"
                         }
                     }
                     .collect { token ->
-                        binding.tvResponse.append(token)
+                        responseBuilder.append(token)
+                        updateConversationDisplay(responseBuilder.toString())
                         // Auto-scroll
                         binding.scrollView.post {
                             binding.scrollView.fullScroll(android.view.View.FOCUS_DOWN)
                         }
                     }
                 
-                binding.tvStatus.text = "Generation complete"
+                // Add assistant response to history
+                val assistantResponse = responseBuilder.toString().trim()
+                if (assistantResponse.isNotEmpty()) {
+                    conversationHistory.add(ChatMessage("assistant", assistantResponse))
+                }
+                
+                binding.tvStatus.text = "Generation complete (${conversationHistory.size / 2} turns)"
+                binding.etPrompt.text.clear() // Clear input for next message
+                
             } catch (e: LlamaException.GenerationCancelled) {
                 binding.tvStatus.text = "Generation cancelled"
             } catch (e: Exception) {
@@ -265,6 +298,24 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    
+    private fun updateConversationDisplay(currentResponse: String = "") {
+        val display = StringBuilder()
+        
+        for (msg in conversationHistory) {
+            when (msg.role) {
+                "user" -> display.append("👤 You: ${msg.content}\n\n")
+                "assistant" -> display.append("🤖 AI: ${msg.content}\n\n")
+            }
+        }
+        
+        // Show current streaming response
+        if (currentResponse.isNotEmpty()) {
+            display.append("🤖 AI: $currentResponse")
+        }
+        
+        binding.tvResponse.text = display.toString()
+    }
 
     private fun cancelGeneration() {
         model?.cancelGeneration()
@@ -272,6 +323,35 @@ class MainActivity : AppCompatActivity() {
         binding.tvStatus.text = "Cancelled"
         binding.btnGenerate.isEnabled = true
         binding.btnCancel.isEnabled = false
+    }
+
+    /**
+     * Format prompt using Llama 3.2 Instruct chat template with conversation history
+     * Reference: https://llama.meta.com/docs/model-cards-and-prompt-formats/llama3_2
+     */
+    private fun formatLlama32ChatWithHistory(systemPrompt: String, history: List<ChatMessage>): String {
+        return buildString {
+            append("<|begin_of_text|>")
+            
+            // System message
+            if (systemPrompt.isNotBlank()) {
+                append("<|start_header_id|>system<|end_header_id|>\n\n")
+                append(systemPrompt)
+                append("<|eot_id|>")
+            }
+            
+            // Conversation history
+            for (msg in history) {
+                append("<|start_header_id|>${msg.role}<|end_header_id|>\n\n")
+                append(msg.content)
+                append("<|eot_id|>")
+            }
+            
+            // Start assistant response (only if last message was from user)
+            if (history.lastOrNull()?.role == "user") {
+                append("<|start_header_id|>assistant<|end_header_id|>\n\n")
+            }
+        }
     }
 
     override fun onDestroy() {

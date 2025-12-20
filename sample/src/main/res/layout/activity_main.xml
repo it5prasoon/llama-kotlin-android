@@ -25,16 +25,43 @@
         android:layout_marginTop="8dp"
         android:text="Select Model File (.gguf)" />
 
-    <!-- Prompt Input -->
+    <!-- System Prompt -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="System Prompt:"
+        android:textStyle="bold" />
+
+    <EditText
+        android:id="@+id/etSystemPrompt"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="System prompt (personality)..."
+        android:inputType="textMultiLine"
+        android:minLines="2"
+        android:maxLines="3"
+        android:gravity="top"
+        android:padding="12dp"
+        android:text="You are a helpful, friendly AI assistant. Respond concisely and helpfully."
+        android:background="@android:drawable/edit_text" />
+
+    <!-- User Prompt Input -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="Your Message:"
+        android:textStyle="bold" />
+
     <EditText
         android:id="@+id/etPrompt"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:hint="Enter your prompt..."
+        android:hint="Type your message..."
         android:inputType="textMultiLine"
-        android:minLines="3"
-        android:maxLines="5"
+        android:minLines="2"
+        android:maxLines="4"
         android:gravity="top"
         android:padding="12dp"
         android:background="@android:drawable/edit_text" />
