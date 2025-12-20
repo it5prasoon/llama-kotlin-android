@@ -8,6 +8,22 @@ A Kotlin-first Android library for running LLaMA models on-device using [llama.c
 
 ---
 
+## 📖 Table of Contents
+
+- [Screenshots](#-screenshots-from-sample-app)
+- [Quick Start](#-quick-start)
+- [Features](#-features)
+- [API Reference](#-api-reference)
+- [Chat Templates](#-chat-templates)
+- [Supported Models](#-supported-models)
+- [Architecture](#-architecture)
+- [Building from Source](#️-building-from-source)
+- [Requirements](#-requirements)
+- [Contributing](#-contributing)
+- [License](#-license)
+
+---
+
 ## 📸 Screenshots from Sample App
 
 <!-- Add screenshots here when available -->
@@ -23,7 +39,7 @@ A Kotlin-first Android library for running LLaMA models on-device using [llama.c
 
 ```kotlin
 dependencies {
-    implementation("io.github.it5prasoon:llama-kotlin-android:1.0.0")
+    implementation("io.github.it5prasoon:llama-kotlin-android:0.1.0")
 }
 ```
 
@@ -94,22 +110,6 @@ cd llama-kotlin-android
 - **Auto-load models** - Sample app remembers last used model
 - **Small footprint** - ~15 MB library size (without models)
 - **Memory safe** - Automatic resource cleanup with Closeable pattern
-
----
-
-## 📖 Table of Contents
-
-- [Screenshots](#-screenshots)
-- [Quick Start](#-quick-start)
-- [Features](#-features)
-- [API Reference](#-api-reference)
-- [Chat Templates](#-chat-templates)
-- [Supported Models](#-supported-models)
-- [Architecture](#-architecture)
-- [Building from Source](#️-building-from-source)
-- [Requirements](#-requirements)
-- [Contributing](#-contributing)
-- [License](#-license)
 
 ---
 
